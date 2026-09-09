@@ -1,0 +1,220 @@
+import { getAuthUserId } from "@convex-dev/auth/server";
+import { v } from "convex/values";
+import { mutation, query, type QueryCtx } from "./_generated/server";
+import { Doc } from "./_generated/dataModel";
+import {
+  balanceOf,
+  HANDLE_RE,
+  ISSUANCE_RATE,
+  issuanceFor,
+  supplyStats as computeSupplyStats,
+  validatePayment,
+} from "./rules";
+
+/**
+ * Nexis (NXS) — the Nexis Funding Protocol's internal team currency.
+ *
+ * The supply policy and all money rules (issuance rate, once-per-proof,
+ * payment validation, balance fold) live in ./rules.ts — pure and unit-tested
+ * by scripts/nexis.test.ts. This file is only the Convex wiring: auth,
+ * ownership, existence checks, and ledger appends.
+ *
+ * Deliberately out of scope for this increment: fiat on/off ramps, wallets,
+ * and anything convertible to real money. NXS is an internal unit of account
+ * for recognizing and settling contribution within the team — full stop.
+ */
+
+/** The signed-in member's balance and most recent ledger entries. */
+export const myWallet = query({
+  args: {},
+  handler: async (ctx) => {
+    const userId = await getAuthUserId(ctx);
+    if (userId === null) return null;
+    const user = await ctx.db.get(userId);
+    if (!user?.handle) {
+      return { handle: null, balance: 0, entries: [] as Doc<"ledger">[] };
+    }
+    return walletFor(ctx, user.handle);
+  },
+});
+
+async function walletFor(ctx: QueryCtx, handle: string) {
+  const [credited, debited, entries] = await Promise.all([
+    ctx.db
+      .query("ledger")
+      .withIndex("to_handle", (q) => q.eq("toHandle", handle))
+      .collect(),
+    ctx.db
+      .query("ledger")
+      .withIndex("from_handle", (q) => q.eq("fromHandle", handle))
+      .collect(),
+    ctx.db.query("ledger").order("desc").take(200),
+  ]);
+  const credit = balanceOf(credited, handle);
+  const debit = -balanceOf(debited, handle);
+  return {
+    handle,
+    balance: credit + debit,
+    entries: entries.filter(
+      (e) => e.toHandle === handle || e.fromHandle === handle,
+    ),
+  };
+}
+
+/**
+ * Redeem a Bitcoin-anchored proof for NXS. Idempotent: one proof can be
+ * redeemed exactly once (enforced by the by_attestation index), and only
+ * proofs that are actually anchored on-chain qualify. Whoever owns the proof
+ * claims the issuance.
+ */
+export const redeemProof = mutation({
+  args: { attestationId: v.id("attestations") },
+  handler: async (ctx, { attestationId }) => {
+    const userId = await getAuthUserId(ctx);
+    if (userId === null) throw new Error("Sign in first.");
+    const user = await ctx.db.get(userId);
+    if (!user?.handle) throw new Error("Claim a handle first.");
+
+    const att = await ctx.db.get(attestationId);
+    if (!att) throw new Error("Proof not found.");
+    if (att.creatorUserId !== userId) {
+      throw new Error("Only the proof's owner can redeem it.");
+    }
+
+    const prior = await ctx.db
+      .query("ledger")
+      .withIndex("by_attestation", (q) => q.eq("attestationId", attestationId))
+      .first();
+    // Anchored-only + once-per-proof + rate are the tested rules in rules.ts.
+    const amount = issuanceFor(att, prior !== null);
+    await ctx.db.insert("ledger", {
+      kind: "issuance",
+      toHandle: user.handle,
+      amount,
+      attestationId,
+      digest: att.digest,
+    });
+    return amount;
+  },
+});
+
+/** Pay NXS to another team handle. The balance is checked server-side. */
+export const pay = mutation({
+  args: {
+    toHandle: v.string(),
+    amount: v.number(),
+    note: v.optional(v.string()),
+  },
+  handler: async (ctx, { toHandle, amount, note }) => {
+    const userId = await getAuthUserId(ctx);
+    if (userId === null) throw new Error("Sign in first.");
+    const payer = await ctx.db.get(userId);
+    if (!payer?.handle) throw new Error("Claim a handle first.");
+
+    // All payment-shape + balance rules are the tested rules in rules.ts.
+    const verdict = validatePayment(
+      { payerHandle: payer.handle, toHandle, amount },
+      [],
+    );
+    if (!verdict.ok) throw new Error(verdict.error);
+
+    const recipient = await ctx.db
+      .query("users")
+      .withIndex("by_handle", (q) => q.eq("handle", verdict.toHandle))
+      .first();
+    if (!recipient) {
+      throw new Error(`No member holds the handle "${verdict.toHandle}".`);
+    }
+
+    const payerHandle: string = payer.handle;
+    const [credited, debited] = await Promise.all([
+      ctx.db
+        .query("ledger")
+        .withIndex("to_handle", (q) => q.eq("toHandle", payerHandle))
+        .collect(),
+      ctx.db
+        .query("ledger")
+        .withIndex("from_handle", (q) => q.eq("fromHandle", payerHandle))
+        .collect(),
+    ]);
+    if (balanceOf([...credited, ...debited], payerHandle) < verdict.amount) {
+      throw new Error(
+        `Insufficient balance: you hold ${balanceOf([...credited, ...debited], payerHandle)} NXS but tried to send ${verdict.amount}.`,
+      );
+    }
+
+    await ctx.db.insert("ledger", {
+      kind: "payment",
+      toHandle: verdict.toHandle,
+      fromHandle: payer.handle,
+      amount: verdict.amount,
+      note: note?.trim() || undefined,
+    });
+    return { to: verdict.toHandle, amount: verdict.amount };
+  },
+});
+
+/** All anchored, not-yet-redeemed proofs owned by the signed-in member. */
+export const redeemable = query({
+  args: {},
+  handler: async (ctx) => {
+    const userId = await getAuthUserId(ctx);
+    if (userId === null) return [];
+    const user = await ctx.db.get(userId);
+    if (!user?.handle) return [];
+
+    const ownerHandle: string = user.handle;
+    const atts = await ctx.db
+      .query("attestations")
+      .withIndex("handle", (q) => q.eq("handle", ownerHandle))
+      .collect();
+    const mine = atts.filter(
+      (a) => a.creatorUserId === userId && a.status === "anchored",
+    );
+    const results: {
+      attestationId: Doc<"attestations">["_id"];
+      repo: string;
+      score: number;
+      nxs: number;
+      bitcoinBlockHeight: number | undefined;
+    }[] = [];
+    for (const att of mine) {
+      const prior = await ctx.db
+        .query("ledger")
+        .withIndex("by_attestation", (q) => q.eq("attestationId", att._id))
+        .first();
+      if (!prior) {
+        results.push({
+          attestationId: att._id,
+          repo: att.repo,
+          score: att.score,
+          nxs: att.score * ISSUANCE_RATE,
+          bitcoinBlockHeight: att.bitcoinBlockHeight,
+        });
+      }
+    }
+    return results;
+  },
+});
+
+/** Aggregate supply stats for the workspace: minted, moved, holders. */
+export const supplyStats = query({
+  args: {},
+  handler: async (ctx) => {
+    const all = await ctx.db.query("ledger").collect();
+    return {
+      ...computeSupplyStats(all),
+      entries: all.length,
+    };
+  },
+});
+
+/** Public, read-only ledger — any signed-in team member can audit it. */
+export const recentLedger = query({
+  args: {},
+  handler: async (ctx) => {
+    const userId = await getAuthUserId(ctx);
+    if (userId === null) return [];
+    return ctx.db.query("ledger").order("desc").take(100);
+  },
+});

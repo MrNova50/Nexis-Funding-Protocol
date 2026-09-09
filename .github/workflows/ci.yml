@@ -1,0 +1,32 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+jobs:
+  verify:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: latest
+
+      - name: Install dependencies
+        run: bun install --frozen-lockfile
+
+      - name: Typecheck (frontend + Convex config)
+        run: bunx tsc -b --noEmit
+
+      - name: Unit tests — Nexis money rules
+        run: bun test scripts/nexis.test.ts
+
+      # Live network check: proves the OTS implementation against a real
+      # Bitcoin-anchored receipt. Allowed to keep running if the sandbox
+      # blocks outbound traffic, but failures surface in the log.
+      - name: OTS protocol smoke test (live)
+        run: bun run scripts/ots-smoke.ts
+        continue-on-error: true
