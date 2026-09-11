@@ -1,9 +1,15 @@
 import { getAuthUserId } from "@convex-dev/auth/server";
+import {
+  paginationOptsValidator,
+  type PaginationResult,
+} from "convex/server";
 import { v } from "convex/values";
 import { mutation, query, type QueryCtx } from "./_generated/server";
 import { Doc } from "./_generated/dataModel";
+import { toPaginationResult, windowedPage } from "./pagination";
 import {
   balanceOf,
+  compareLedgerKeys,
   HANDLE_RE,
   ISSUANCE_RATE,
   issuanceFor,
@@ -24,7 +30,15 @@ import {
  * for recognizing and settling contribution within the team — full stop.
  */
 
-/** The signed-in member's balance and most recent ledger entries. */
+/**
+ * The signed-in member's handle and computed balance.
+ *
+ * Balance computation is deliberately untouched: it still folds over the
+ * member's two full indexed ledger scans (tracked separately in the balance
+ * issue). The old ~200-entry `entries` truncation is gone: the member's full
+ * history is served by the paginated per-handle ledger query (`handleLedger`)
+ * used by the public proof page — nothing in the wallet path truncates.
+ */
 export const myWallet = query({
   args: {},
   handler: async (ctx) => {
@@ -32,14 +46,14 @@ export const myWallet = query({
     if (userId === null) return null;
     const user = await ctx.db.get(userId);
     if (!user?.handle) {
-      return { handle: null, balance: 0, entries: [] as Doc<"ledger">[] };
+      return { handle: null, balance: 0 };
     }
-    return walletFor(ctx, user.handle);
+    return walletBalanceFor(ctx, user.handle);
   },
 });
 
-async function walletFor(ctx: QueryCtx, handle: string) {
-  const [credited, debited, entries] = await Promise.all([
+async function walletBalanceFor(ctx: QueryCtx, handle: string) {
+  const [credited, debited] = await Promise.all([
     ctx.db
       .query("ledger")
       .withIndex("to_handle", (q) => q.eq("toHandle", handle))
@@ -48,17 +62,60 @@ async function walletFor(ctx: QueryCtx, handle: string) {
       .query("ledger")
       .withIndex("from_handle", (q) => q.eq("fromHandle", handle))
       .collect(),
-    ctx.db.query("ledger").order("desc").take(200),
   ]);
   const credit = balanceOf(credited, handle);
   const debit = -balanceOf(debited, handle);
-  return {
-    handle,
-    balance: credit + debit,
-    entries: entries.filter(
-      (e) => e.toHandle === handle || e.fromHandle === handle,
+  return { handle, balance: credit + debit };
+}
+
+/**
+ * A handle's ledger history, newest page first — the public proof page's
+ * full-history view. Read-only, no sign-in required: the ledger is the
+ * team's shared audit surface. Conforms to the standard paginationOpts
+ * contract, so the client can drive it with `usePaginatedQuery`.
+ */
+export const handleLedger = query({
+  args: {
+    handle: v.string(),
+    paginationOpts: paginationOptsValidator,
+  },
+  handler: (ctx, { handle, paginationOpts }) =>
+    handleLedgerPage(
+      ctx,
+      handle.toLowerCase().trim(),
+      paginationOpts.cursor,
+      paginationOpts.numItems,
     ),
-  };
+});
+
+/**
+ * One page of a handle's ledger, returned as a standard PaginationResult.
+ * The handle's entries come from two indexed scans (credits + debits); they
+ * are merged into the ledger's canonical order — `_creationTime` asc, `_id`
+ * breaking ties, newest first here — and windowed by cursor. The full sort
+ * key in the cursor keeps the walk gapless even when many entries share one
+ * `_creationTime`.
+ */
+async function handleLedgerPage(
+  ctx: QueryCtx,
+  handle: string,
+  cursor: string | null,
+  numItems: number,
+) {
+  const [credited, debited] = await Promise.all([
+    ctx.db
+      .query("ledger")
+      .withIndex("to_handle", (q) => q.eq("toHandle", handle))
+      .collect(),
+    ctx.db
+      .query("ledger")
+      .withIndex("from_handle", (q) => q.eq("fromHandle", handle))
+      .collect(),
+  ]);
+  const sortedDesc = [...credited, ...debited].sort((a, b) =>
+    compareLedgerKeys(b, a),
+  );
+  return toPaginationResult(windowedPage(sortedDesc, cursor, numItems));
 }
 
 /**
@@ -209,12 +266,23 @@ export const supplyStats = query({
   },
 });
 
-/** Public, read-only ledger — any signed-in team member can audit it. */
+/**
+ * Public, read-only team ledger — any signed-in team member can audit it.
+ * Newest page first via the system `_creation_time` index (O(page) reads per
+ * request), paginated back to entry zero: older entries are always reachable,
+ * never silently truncated away.
+ */
 export const recentLedger = query({
-  args: {},
-  handler: async (ctx) => {
+  args: { paginationOpts: paginationOptsValidator },
+  handler: async (ctx, { paginationOpts }) => {
     const userId = await getAuthUserId(ctx);
-    if (userId === null) return [];
-    return ctx.db.query("ledger").order("desc").take(100);
+    if (userId === null) return EMPTY_PAGE_RESULT;
+    return ctx.db.query("ledger").order("desc").paginate(paginationOpts);
   },
 });
+
+const EMPTY_PAGE_RESULT: PaginationResult<Doc<"ledger">> = {
+  page: [],
+  isDone: true,
+  continueCursor: "",
+};
