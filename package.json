@@ -8,7 +8,7 @@
     "build": "tsc -b && vite build",
     "lint": "eslint .",
     "format": "prettier --write .",
-    "test": "bun test scripts/nexis.test.ts",
+    "test": "bun test scripts/nexis.test.ts scripts/verifier.test.ts",
     "smoke": "bun run scripts/ots-smoke.ts",
     "preview": "vite preview"
   },

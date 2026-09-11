@@ -4,6 +4,7 @@ import {
   copyText,
   downloadReceipt,
   formatBlockTime,
+  formatRelativeTime,
   shortDigest,
   shortSha,
   type AttestationDoc,
@@ -200,8 +201,19 @@ export function AttestationCard({
             </p>
             <p>
               The digest is committed to OpenTimestamps calendars. A Bitcoin
-              anchor usually appears within a few hours; run verify again later.
+              anchor usually appears within a few hours; verification runs
+              automatically every 10 minutes.
             </p>
+            {att.lastVerifiedAt !== undefined && (
+              <p className="mt-1 text-[11px]">
+                Last checked {formatRelativeTime(att.lastVerifiedAt)}
+                {att.verifyAttempts !== undefined && att.verifyAttempts > 0 &&
+                  ` · ${att.verifyAttempts} check${att.verifyAttempts === 1 ? "" : "s"}`}
+                {att.lastVerifyError && (
+                  <span className="text-destructive"> · last error: {att.lastVerifyError}</span>
+                )}
+              </p>
+            )}
           </div>
         </div>
       )}

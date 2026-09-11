@@ -63,6 +63,14 @@ const schema = defineSchema(
       otsReceipt: v.optional(v.string()),
       bitcoinBlockHeight: v.optional(v.number()),
       bitcoinBlockTime: v.optional(v.number()),
+
+      // auto-verification bookkeeping (written by the background verifier):
+      // last time ANY verification path (cron or manual) ran the check
+      lastVerifiedAt: v.optional(v.number()),
+      // consecutive failed/not-yet-anchored attempts (reset on anchor)
+      verifyAttempts: v.optional(v.number()),
+      // outcome of the most recent attempt, for quick UI display
+      lastVerifyError: v.optional(v.string()),
     })
       .index("handle", ["handle"])
       .index("kind", ["kind"])
@@ -72,6 +80,31 @@ const schema = defineSchema(
     // from a Bitcoin-anchored proof; payment transfers NXS between handles.
     // Every entry cites its provenance (attestation digest or payer) so the
     // whole money supply can be audited from the ledger alone.
+    // Audit trail for OpenTimestamps verification attempts (cron + manual).
+    // One row per attempt so failures are inspectable, not silent.
+    otsVerificationLog: defineTable({
+      attestationId: v.id("attestations"),
+      // who triggered it: the scheduled job or a signed-in user
+      trigger: v.union(v.literal("cron"), v.literal("manual")),
+      // "anchored" = upgraded to a Bitcoin block this attempt;
+      // "already_anchored" = check ran, nothing changed;
+      // "pending" = check ran, no Bitcoin anchor yet;
+      // "error" = attempt failed (calendars/explorer/network)
+      outcome: v.union(
+        v.literal("anchored"),
+        v.literal("already_anchored"),
+        v.literal("pending"),
+        v.literal("error"),
+      ),
+      // error message when outcome === "error"
+      error: v.optional(v.string()),
+      // true if this attempt upgraded the stored receipt bytes
+      receiptChanged: v.optional(v.boolean()),
+    })
+      .index("by_attestation", ["attestationId"])
+      // _creationTime is implicitly appended, giving trigger + time ordering.
+      .index("by_trigger", ["trigger"]),
+
     ledger: defineTable({
       kind: v.union(v.literal("issuance"), v.literal("payment")),
       // credited party
