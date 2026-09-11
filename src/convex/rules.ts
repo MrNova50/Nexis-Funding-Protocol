@@ -14,6 +14,56 @@ export const ISSUANCE_RATE = 1; // NXS per contribution-score point
 
 export const HANDLE_RE = /^[a-z0-9][a-z0-9-]{1,31}$/;
 
+/**
+ * How many ledger entries each page of the ledger views returns. Small enough
+ * for cheap reactive re-reads, big enough that an auditor rarely pages twice.
+ */
+export const LEDGER_PAGE_SIZE = 25;
+
+/**
+ * A cursor position in the ledger's stable order: `_creationTime` ascending,
+ * `_id` breaking ties. Both fields exist on every ledger document, so the
+ * order is total, stable, and gapless — an auditor paging page after page
+ * walks the exact ledger, never skipping or repeating an entry.
+ */
+export type LedgerCursor = { _creationTime: number; _id: string };
+
+/**
+ * Total order over ledger documents: `_creationTime` first, `_id` only to
+ * break ties (two entries can share a creation time). The `_id` comparison is
+ * lexicographic; it must merely be a deterministic total order, and a string
+ * comparison of Convex ids is one — so a key never sorts differently on two
+ * different reads (which would silently skip or duplicate entries).
+ */
+export function compareLedgerKeys(
+  a: LedgerCursor,
+  b: LedgerCursor,
+): number {
+  if (a._creationTime !== b._creationTime) {
+    return a._creationTime < b._creationTime ? -1 : 1;
+  }
+  if (a._id === b._id) return 0;
+  return a._id < b._id ? -1 : 1;
+}
+
+/**
+ * Advance a pagination cursor past every key seen so far.
+ *
+ * The ledger views append pages newest-page-first, so a later page can still
+ * contain keys older than or interleaved with an earlier page's keys. Merging
+ * (not just max) the sort keys keeps the cursor truly total: a repeated
+ * `nextCursor` call over any set of seen pages returns a position past ALL
+ * of them, so the next fetched page never repeats a key the UI already has.
+ * Pure so the merge order itself is unit-testable.
+ */
+export function nextCursor(
+  cursor: LedgerCursor | null,
+  page: LedgerCursor[],
+): LedgerCursor | null {
+  const keys = (cursor ? [cursor, ...page] : [...page]).sort(compareLedgerKeys);
+  return keys.length > 0 ? (keys[keys.length - 1] ?? null) : null;
+}
+
 export type LedgerEntry = {
   kind: "issuance" | "payment";
   toHandle: string;

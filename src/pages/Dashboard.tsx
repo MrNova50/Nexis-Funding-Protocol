@@ -1,7 +1,9 @@
-import { useAction, useMutation, useQuery } from "convex/react";
+import { useAction, useMutation, usePaginatedQuery, useQuery } from "convex/react";
 import { api } from "@/convex/_generated/api";
 import { useAuth } from "@/hooks/use-auth";
 import { AttestationCard } from "@/components/AttestationCard";
+import { LedgerEntryRow } from "@/components/LedgerEntryRow";
+import { LedgerPager } from "@/components/LedgerPager";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
@@ -11,9 +13,9 @@ import {
   HANDLE_RE,
   type AttestationId,
 } from "@/lib/proof";
+import { LEDGER_PAGE_SIZE } from "@/convex/rules";
 import { motion } from "framer-motion";
 import {
-  ArrowDownLeft,
   Bitcoin,
   Coins,
   Copy,
@@ -37,7 +39,12 @@ export default function Dashboard() {
   const data = useQuery(api.attestations.myAttestations);
   const wallet = useQuery(api.nexis.myWallet);
   const redeemable = useQuery(api.nexis.redeemable);
-  const ledger = useQuery(api.nexis.recentLedger);
+  // Cursor-paginated team ledger: every page appends below, back to entry 0.
+  const ledger = usePaginatedQuery(
+    api.nexis.recentLedger,
+    {},
+    { initialNumItems: LEDGER_PAGE_SIZE },
+  );
   const claimHandle = useMutation(api.attestations.claimHandle);
   const saveAttestation = useMutation(api.attestations.saveAttestation);
   const redeemProof = useMutation(api.nexis.redeemProof);
@@ -361,61 +368,24 @@ export default function Dashboard() {
             every payment cites its sender.
           </p>
           <div className="mt-4 flex flex-col gap-2">
-            {(ledger ?? []).length === 0 ? (
+            {ledger.results.length === 0 ? (
               <p className="clay-card-sm p-4 text-center text-sm text-muted-foreground">
                 No Nexis has moved yet.
               </p>
             ) : (
-              (ledger ?? []).map((entry) => {
-                const mine = entry.toHandle === data.handle;
-                const outgoing = entry.fromHandle === data.handle;
-                return (
-                  <div
-                    key={entry._id}
-                    className="clay-card-sm flex flex-wrap items-center justify-between gap-2 p-3.5"
-                  >
-                    <div className="flex min-w-0 items-center gap-3">
-                      <div
-                        className={`flex size-8 shrink-0 items-center justify-center rounded-xl ${
-                          entry.kind === "issuance"
-                            ? "bg-accent/20 text-accent"
-                            : "bg-primary/10 text-primary"
-                        }`}
-                      >
-                        {entry.kind === "issuance" ? (
-                          <Coins className="size-4" />
-                        ) : mine ? (
-                          <ArrowDownLeft className="size-4" />
-                        ) : (
-                          <Send className="size-4" />
-                        )}
-                      </div>
-                      <div className="min-w-0 text-sm">
-                        <p className="font-semibold">
-                          {entry.kind === "issuance"
-                            ? `Minted for @${entry.toHandle}`
-                            : `@${entry.fromHandle} → @${entry.toHandle}`}
-                        </p>
-                        <p className="truncate text-xs text-muted-foreground">
-                          {entry.kind === "issuance"
-                            ? `proof ${entry.digest?.slice(0, 10) ?? ""}…`
-                            : entry.note || "payment"}
-                        </p>
-                      </div>
-                    </div>
-                    <p
-                      className={`text-sm font-extrabold tabular-nums ${
-                        outgoing ? "text-muted-foreground" : "text-brass"
-                      }`}
-                    >
-                      {outgoing ? "−" : "+"}
-                      {entry.amount} NXS
-                    </p>
-                  </div>
-                );
-              })
+              ledger.results.map((entry) => (
+                <LedgerEntryRow
+                  key={entry._id}
+                  entry={entry}
+                  viewerHandle={data.handle}
+                />
+              ))
             )}
           </div>
+          <LedgerPager
+            status={ledger.status}
+            onLoadMore={() => ledger.loadMore(LEDGER_PAGE_SIZE)}
+          />
         </section>
       )}
 

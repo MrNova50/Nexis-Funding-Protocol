@@ -17,6 +17,7 @@ import type * as http from "../http.js";
 import type * as nexis from "../nexis.js";
 import type * as ots from "../ots.js";
 import type * as otslib from "../otslib.js";
+import type * as pagination from "../pagination.js";
 import type * as rules from "../rules.js";
 import type * as users from "../users.js";
 import type * as verifier from "../verifier.js";
@@ -39,6 +40,7 @@ declare const fullApi: ApiFromModules<{
   nexis: typeof nexis;
   ots: typeof ots;
   otslib: typeof otslib;
+  pagination: typeof pagination;
   rules: typeof rules;
   users: typeof users;
   verifier: typeof verifier;

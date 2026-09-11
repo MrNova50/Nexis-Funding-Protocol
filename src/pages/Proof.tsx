@@ -1,12 +1,15 @@
-import { useQuery } from "convex/react";
+import { usePaginatedQuery, useQuery } from "convex/react";
 import { api } from "@/convex/_generated/api";
 import { AttestationCard } from "@/components/AttestationCard";
+import { LedgerEntryRow } from "@/components/LedgerEntryRow";
+import { LedgerPager } from "@/components/LedgerPager";
 import { Button } from "@/components/ui/button";
 import { Skeleton } from "@/components/ui/skeleton";
 import { useAuth } from "@/hooks/use-auth";
 import { formatBlockTime } from "@/lib/proof";
+import { LEDGER_PAGE_SIZE } from "@/convex/rules";
 import { motion } from "framer-motion";
-import { Bitcoin, ExternalLink, Github, ShieldCheck } from "lucide-react";
+import { Bitcoin, Coins, ExternalLink, Github, ShieldCheck } from "lucide-react";
 import { Link, useParams } from "react-router";
 
 export default function Proof() {
@@ -14,6 +17,13 @@ export default function Proof() {
   const proof = useQuery(api.attestations.publicProof, {
     handle: handle.toLowerCase(),
   });
+  // Full NXS history for this handle: cursor-paginated, gapless back to the
+  // first entry the handle ever touched. No sign-in required to audit it.
+  const history = usePaginatedQuery(
+    api.nexis.handleLedger,
+    { handle: handle.toLowerCase() },
+    { initialNumItems: LEDGER_PAGE_SIZE },
+  );
   const { isAuthenticated } = useAuth();
 
   if (proof === undefined) {
@@ -136,6 +146,38 @@ export default function Proof() {
           ))
         )}
       </div>
+
+      {/* full NXS history for this handle */}
+      <section className="clay-card mt-6 p-6 sm:p-8">
+        <div className="flex flex-wrap items-center justify-between gap-3">
+          <div>
+            <h2 className="text-xl font-bold tracking-tight">NXS history</h2>
+            <p className="mt-1 text-sm text-muted-foreground">
+              Every ledger entry that credits or debits @{proof.handle} — the
+              same append-only ledger the whole team audits.
+            </p>
+          </div>
+          <span className="clay-chip flex items-center gap-1.5 px-3 py-1 text-xs font-semibold">
+            <Coins className="size-3.5" />
+            Append-only · no entries omitted
+          </span>
+        </div>
+        <div className="mt-4 flex flex-col gap-2">
+          {history.results.length === 0 ? (
+            <p className="clay-card-sm p-4 text-center text-sm text-muted-foreground">
+              No Nexis has touched this handle yet.
+            </p>
+          ) : (
+            history.results.map((entry) => (
+              <LedgerEntryRow key={entry._id} entry={entry} viewerHandle={proof.handle} />
+            ))
+          )}
+        </div>
+        <LedgerPager
+          status={history.status}
+          onLoadMore={() => history.loadMore(LEDGER_PAGE_SIZE)}
+        />
+      </section>
 
       <footer className="mt-10 flex flex-col items-center gap-3 pb-8 text-center">
         <ShieldCheck className="size-6 text-brass" />

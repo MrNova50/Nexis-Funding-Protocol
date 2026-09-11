@@ -59,9 +59,14 @@ ledger.
   - **pay NXS** to any member handle with an optional memo — balance checked
     server-side before the entry is written;
   - watch the **team ledger**: every issuance cites the proof digest that
-    minted it, every payment cites sender, recipient, and memo.
+    minted it, every payment cites sender, recipient, and memo. The ledger is
+    cursor-paginated (25 entries per page, "load older entries" control) and
+    pages back gaplessly to entry zero — an auditor can reach the very first
+    entry, and the end-of-ledger marker says so explicitly.
 - **Public proof page (`/p/:handle`)** — no sign-in; shows the member's
-  proofs, receipt status, Bitcoin block anchors, and explains that anchored
+  proofs, receipt status, Bitcoin block anchors, their full paginated **NXS
+  history** (every ledger entry that credits or debits the handle, newest
+  first, load-more back to the first entry), and explains that anchored
   proofs are what mint NXS.
 - **Ledger schema (`ledger` table)** — append-only: `issuance` (toHandle,
   amount, attestationId, digest) and `payment` (fromHandle, toHandle,
@@ -93,8 +98,12 @@ the receipt with `ots verify`.
 
 - Balances are computed by scanning ledger entries per query (two indexed
   scans + sum). Fine for a team; becomes a real design question at scale.
-- The ledger view truncates (latest ~100 entries; wallet view ~200) — no
-  pagination yet.
+- Ledger pagination is cursor-based (stable order: `_creationTime` asc with
+  `_id` breaking ties; cursors carry the full sort key so paging is gapless
+  even when entries share a creation time). The team ledger uses the native
+  `_creation_time` index (O(page) reads), but the per-handle view still
+  merges two full indexed scans in memory per request — O(handle), fine for
+  a team, worth revisiting with the balance-cache work if handles grow.
 - OTS anchoring latency: receipts are minted in seconds but confirm in a
   Bitcoin block (minutes to hours); redemption is blocked until then by
   design. The 10-minute auto-verifier closes the loop (max 48 spaced attempts
@@ -110,7 +119,9 @@ the receipt with `ots verify`.
 
 ## Possible next increments (not a plan — next cycle decides)
 
-- Ledger pagination and a per-member balance cache if the scans start to hurt.
+- A per-member balance cache if the ledger scans start to hurt (balances are
+  still folded from the raw ledger on every query; pagination only changed
+  what the UI shows, not how money is computed).
 - An explicit "team treasury" account and treasury-funded grants paid in NXS,
   which would be the first step from internal accounting toward the mission's
   funding flows.
