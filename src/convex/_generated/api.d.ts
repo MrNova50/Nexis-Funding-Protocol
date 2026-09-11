@@ -11,6 +11,7 @@
 import type * as attestations from "../attestations.js";
 import type * as auth from "../auth.js";
 import type * as auth_emailOtp from "../auth/emailOtp.js";
+import type * as crons from "../crons.js";
 import type * as github from "../github.js";
 import type * as http from "../http.js";
 import type * as nexis from "../nexis.js";
@@ -18,6 +19,9 @@ import type * as ots from "../ots.js";
 import type * as otslib from "../otslib.js";
 import type * as rules from "../rules.js";
 import type * as users from "../users.js";
+import type * as verifier from "../verifier.js";
+import type * as verifierActions from "../verifierActions.js";
+import type * as verifierRules from "../verifierRules.js";
 
 import type {
   ApiFromModules,
@@ -29,6 +33,7 @@ declare const fullApi: ApiFromModules<{
   attestations: typeof attestations;
   auth: typeof auth;
   "auth/emailOtp": typeof auth_emailOtp;
+  crons: typeof crons;
   github: typeof github;
   http: typeof http;
   nexis: typeof nexis;
@@ -36,6 +41,9 @@ declare const fullApi: ApiFromModules<{
   otslib: typeof otslib;
   rules: typeof rules;
   users: typeof users;
+  verifier: typeof verifier;
+  verifierActions: typeof verifierActions;
+  verifierRules: typeof verifierRules;
 }>;
 
 /**

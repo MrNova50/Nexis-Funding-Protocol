@@ -90,3 +90,58 @@
 - Score formula refinement and anti-gaming (mint caps, review gates): the
   current formula is legible and honest; tighten only when issuance volume
   makes gaming a real risk.
+
+---
+
+## Cycle 2 — 2026-09-11
+
+### What changed
+
+- **Automatic receipt verification** — anchoring no longer depends on a human
+  remembering to come back. A Convex scheduled action
+  (`src/convex/crons.ts`) runs every 10 minutes and drives the existing
+  verify/upgrade path (`internal.ots.verifyOtsReceipt` →
+  `internal.verifier.recordAttempt`) over every attestation that is still
+  `pending` with stored receipt bytes, flipping upgraded receipts to
+  `anchored` with block height + time. Re-running is idempotent: only
+  still-pending receipts are touched, anchored ones are never re-verified.
+- The manual "Re-verify receipt" button was moved onto the same audit path:
+  every attempt — cron or manual — appends a row to the new
+  `otsVerificationLog` table (`trigger`, `outcome`, `receiptChanged`,
+  `error`) so verification is inspectable, not silent. Outcomes:
+  `anchored` / `already_anchored` / `pending` / `error`.
+- Receipt bookkeeping surfaced on the card: `lastVerifiedAt`, an attempt
+  counter, and the last error show on pending receipts ("Last checked 4
+  minutes ago · 3 checks"), so the background mechanism is legible in the UI.
+- Politeness to shared services (OTS calendars, mempool.space): at most 5
+  receipts verified per tick, at most 48 spaced attempts per receipt (≥15
+  minutes apart), and a receipt that exhausted its budget is skipped rather
+ than hammered.
+- Split the verifier across the two Convex runtimes on purpose: the cron tick
+  is a Node action (`verifierActions.ts`) because the OTS code needs Node;
+  the worklist query and the bookkeeping mutation live in the default
+  runtime (`verifier.ts`), where queries/mutations belong.
+
+### What was learned
+
+- Convex runtimes are strict: a `"use node"` file may only export actions.
+  Splitting query/mutation helpers into the default runtime is the idiomatic
+  shape — and it keeps the audit write path usable from both runtimes.
+- Index fields get `_creationTime` appended implicitly; declaring it
+  explicitly fails the schema push. Ordering by recency comes free.
+- An action whose return type is inferred while its body references
+  `internal.*` creates a self-referential inference cycle (TS7022/7023).
+  Annotating the handler's return type breaks the cycle — the same reason
+  `runOts` already carried one.
+
+### What was deliberately deferred and why
+
+- A UI view over `otsVerificationLog` (the "verification history" panel):
+  the audit rows exist and are queryable; a dashboard surface can be a later
+  increment if operators actually want to scroll attempts.
+- Notification when a receipt anchors (email/IM): the ledger and receipt
+  card already reflect the transition reactively; push notification is
+  polish, not mechanism.
+- Re-minting receipts whose attempt budget is exhausted without an anchor:
+  calendar outages longer than ~48 attempts are hypothetical; the log makes
+  it visible if it ever happens.

@@ -1,8 +1,8 @@
 # STATE — Cycle 1 snapshot (post-rebrand)
 
 > Rewritten every cycle so it always describes the project as it is right
-> now. Not a changelog — HISTORY.md is the changelog. Last updated: Cycle 1,
-> Nexis Funding Protocol rename (September 2026).
+> now. Not a changelog — HISTORY.md is the changelog. Last updated: Cycle 2,
+> auto-verification of pending receipts (September 2026).
 
 ## What this project is
 
@@ -47,6 +47,12 @@ ledger.
     sha256 digest;
   - **mint / verify the OTS receipt** (real calendars, raw .ots bytes stored,
     upgrade to Bitcoin block attestation, block height + time stored);
+  - **never think about anchoring** — a scheduled job (every 10 minutes)
+    verifies pending receipts automatically, so a minted proof becomes
+    Bitcoin-anchored on its own once its block confirms. Every attempt (cron
+    or manual) is logged to an `otsVerificationLog` audit table and
+    bookkeeping (`lastVerifiedAt`, attempt count, last error) is surfaced on
+    the receipt card;
   - **redeem anchored proofs** — each anchored proof mints NXS at 1 point =
     1 NXS, exactly once, enforced server-side via the ledger's
     by-attestation index;
@@ -91,7 +97,9 @@ the receipt with `ots verify`.
   pagination yet.
 - OTS anchoring latency: receipts are minted in seconds but confirm in a
   Bitcoin block (minutes to hours); redemption is blocked until then by
-  design.
+  design. The 10-minute auto-verifier closes the loop (max 48 spaced attempts
+  per receipt, batch of 5 per tick), so a stuck receipt is visible in the
+  audit log instead of silently pending forever.
 - The OTS receipt format is implemented in-repo (`src/convex/otslib.ts`)
   because the npm package's `bitcore-lib` dep cannot bundle in Convex;
   byte-compatibility is proven by `scripts/ots-smoke.ts` against an
@@ -103,8 +111,6 @@ the receipt with `ots verify`.
 ## Possible next increments (not a plan — next cycle decides)
 
 - Ledger pagination and a per-member balance cache if the scans start to hurt.
-- A scheduled job that auto-verifies pending receipts so anchoring doesn't
-  depend on someone clicking verify.
 - An explicit "team treasury" account and treasury-funded grants paid in NXS,
   which would be the first step from internal accounting toward the mission's
   funding flows.
