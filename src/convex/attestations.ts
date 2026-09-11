@@ -276,33 +276,47 @@ export const runOts = action({
       };
     }
 
-    const result: {
-      receipt: string;
-      changed: boolean;
-      bitcoinBlockHeight: number | null;
-      bitcoinBlockTime: number | null;
-    } = await ctx.runAction(internal.ots.verifyOtsReceipt, {
-      digest: att.digest,
-      receipt: existing,
-    });
-    if (result.changed) {
-      await ctx.runMutation(internal.attestations.setOtsReceipt, {
+    // Manual verify shares the audit path with the cron: every attempt is
+    // logged (trigger: "manual") and bookkeeping is updated in one place.
+    try {
+      const result: {
+        receipt: string;
+        changed: boolean;
+        bitcoinBlockHeight: number | null;
+        bitcoinBlockTime: number | null;
+      } = await ctx.runAction(internal.ots.verifyOtsReceipt, {
+        digest: att.digest,
+        receipt: existing,
+      });
+      const anchored =
+        result.bitcoinBlockHeight !== null && result.bitcoinBlockTime !== null;
+      await ctx.runMutation(internal.verifier.recordAttempt, {
         attestationId,
+        trigger: "manual",
+        outcome: anchored
+          ? result.changed
+            ? "anchored"
+            : "already_anchored"
+          : "pending",
+        receiptChanged: result.changed,
         receipt: result.receipt,
+        bitcoinBlockHeight: result.bitcoinBlockHeight ?? undefined,
+        bitcoinBlockTime: result.bitcoinBlockTime ?? undefined,
       });
-    }
-    if (result.bitcoinBlockHeight !== null && result.bitcoinBlockTime !== null) {
-      await ctx.runMutation(internal.attestations.setAnchored, {
+      return {
+        receipt: result.receipt,
+        bitcoinBlockHeight: result.bitcoinBlockHeight,
+        bitcoinBlockTime: result.bitcoinBlockTime,
+      };
+    } catch (err) {
+      await ctx.runMutation(internal.verifier.recordAttempt, {
         attestationId,
-        height: result.bitcoinBlockHeight,
-        blockTime: result.bitcoinBlockTime,
+        trigger: "manual",
+        outcome: "error",
+        error: err instanceof Error ? err.message : String(err),
       });
+      throw err;
     }
-    return {
-      receipt: result.receipt,
-      bitcoinBlockHeight: result.bitcoinBlockHeight,
-      bitcoinBlockTime: result.bitcoinBlockTime,
-    };
   },
 });
 

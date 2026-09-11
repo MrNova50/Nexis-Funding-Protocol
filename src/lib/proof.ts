@@ -21,6 +21,17 @@ export function formatBlockTime(unixSeconds: number): string {
   });
 }
 
+/** "3 minutes ago" style formatting for verification bookkeeping. */
+export function formatRelativeTime(ms: number): string {
+  const diff = ms - Date.now();
+  const abs = Math.abs(diff);
+  const rtf = new Intl.RelativeTimeFormat(undefined, { numeric: "auto" });
+  if (abs < 60_000) return rtf.format(Math.round(diff / 1000), "second");
+  if (abs < 3_600_000) return rtf.format(Math.round(diff / 60_000), "minute");
+  if (abs < 86_400_000) return rtf.format(Math.round(diff / 3_600_000), "hour");
+  return rtf.format(Math.round(diff / 86_400_000), "day");
+}
+
 export function downloadReceipt(
   handle: string,
   digest: string,
